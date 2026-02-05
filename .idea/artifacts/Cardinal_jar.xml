@@ -1,0 +1,8 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="Cardinal:jar">
+    <output-path>$PROJECT_DIR$/../../../../test</output-path>
+    <root id="archive" name="Cardinal.jar">
+      <element id="module-output" name="Cardinal" />
+    </root>
+  </artifact>
+</component>

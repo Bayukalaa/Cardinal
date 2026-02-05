@@ -1,0 +1,6 @@
+dev.onlydarkness.utils.modules.ConsoleLoggerModule
+dev.onlydarkness.utils.modules.DailyBackupModule
+dev.onlydarkness.utils.modules.FileLoggerModule
+dev.onlydarkness.utils.modules.WebServerModule
+dev.onlydarkness.utils.modules.DiscordBotModule
+dev.onlydarkness.utils.modules.DatabaseModule
