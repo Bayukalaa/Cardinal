@@ -38,6 +38,7 @@ public class ConfigManager {
             properties.setProperty("auto-run-webserver", "true");
             properties.setProperty("web-port", "8080");
             properties.setProperty("web-root", "web");
+            properties.setProperty("php-cgi-path","C:/PHP/php-cgi.exe");
             properties.setProperty("db-host", "localhost");
             properties.setProperty("db-port", "3306");
             properties.setProperty("db-name", "cardinal_db");

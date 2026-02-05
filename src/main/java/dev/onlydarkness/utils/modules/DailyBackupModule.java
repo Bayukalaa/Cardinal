@@ -14,23 +14,44 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 public class DailyBackupModule implements IModule {
 
-    // NOT: Artık "static final" ayarlar yok. Hepsi Config'den okunacak.
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
     @Override
     public String getName() {
         return "DailyBackup";
     }
 
+
     @Override
-    public void onEnable(ModuleContext context)  {
+    public void onEnable(ModuleContext context) {
+
+        startBackupCycle(context);
+    }
+
+    @Override
+    public void onDisable() {
+
+        scheduler.shutdown();
+    }
+
+    public void startBackupCycle(ModuleContext context) {
+        context.publishEvent("SYSTEM_LOG", new LogEvent(LogEvent.Level.INFO, getName(), "[BACKUP] Backup service has been started"));
 
 
+        scheduler.scheduleAtFixedRate(() -> performBackupTask(context), 0, 24, TimeUnit.HOURS);
+    }
+
+
+    private void performBackupTask(ModuleContext context) {
         boolean isEnabled = context.getConfigBoolean("backup-enabled", true);
         if (!isEnabled) {
             context.publishEvent("SYSTEM_LOG", new LogEvent(LogEvent.Level.INFO, getName(), "Module is disabled in configuration."));
@@ -39,48 +60,37 @@ public class DailyBackupModule implements IModule {
 
         String backupFolderName = context.getConfigString("backup-path", "backups");
 
-
         String filesConfig = context.getConfigString("files-to-backup", "modules,server.properties,logs");
         List<String> filesToBackup = Arrays.stream(filesConfig.split(","))
-                .map(String::trim) // Boşlukları sil (örn: " logs" -> "logs")
                 .collect(Collectors.toList());
-        // ------------------------------------------------------------
 
-        // Tarih Formatı
         String todayDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
         String zipFileName = "backup-" + todayDate + ".zip";
 
-        // Klasör ve Dosya Hazırlığı
         File backupDir = new File(backupFolderName);
         if (!backupDir.exists()) backupDir.mkdirs();
 
         File targetFile = new File(backupDir, zipFileName);
 
-        // Kontrol: Bugün yedek alındı mı?
         if (targetFile.exists()) {
             context.publishEvent("SYSTEM_LOG", new LogEvent(LogEvent.Level.INFO, getName(), "Backup already exists for today. Skipping."));
             return;
         }
 
-        // Yedeklemeyi Başlat (Parametreleri gönderiyoruz)
         startAsyncBackup(context, targetFile, backupFolderName, filesToBackup);
     }
-
-    @Override
-    public void onDisable() {}
 
     private void startAsyncBackup(ModuleContext context, File targetZip, String backupFolderName, List<String> filesToBackup) {
         new Thread(() -> {
             context.publishEvent("SYSTEM_LOG", new LogEvent(LogEvent.Level.WARN, getName(), "Starting backup process..."));
 
-            // Backup klasörünün tam yolunu al (Kendini yedeklememek için filtrede kullanacağız)
             Path backupPathAbs = new File(backupFolderName).toPath().toAbsolutePath();
 
             try (FileOutputStream fos = new FileOutputStream(targetZip);
                  ZipOutputStream zos = new ZipOutputStream(fos)) {
 
                 for (String pathName : filesToBackup) {
-                    if (pathName.isEmpty()) continue; // Boş virgül varsa atla
+                    if (pathName.isEmpty()) continue;
 
                     File sourceFile = new File(pathName);
 
@@ -110,25 +120,20 @@ public class DailyBackupModule implements IModule {
         Path parentPath = sourcePath.getParent() == null ? Paths.get(".") : sourcePath.getParent();
 
         Files.walkFileTree(sourcePath, new SimpleFileVisitor<Path>() {
-
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
-                // Filtreleme: Backup klasörünün kendisi veya target klasörü
                 if (dir.toAbsolutePath().startsWith(backupPathAbs) || dir.toString().contains("target")) {
                     return FileVisitResult.SKIP_SUBTREE;
                 }
 
-                System.out.println("[BackupDebug] Entering folder: " + dir.getFileName());
 
-                // Klasör yapısını korumak için boş klasör girdisi ekle
                 String zipEntryPath = parentPath.relativize(dir).toString().replace("\\", "/") + "/";
-
                 if (!zipEntryPath.equals("./")) {
                     try {
                         zos.putNextEntry(new ZipEntry(zipEntryPath));
                         zos.closeEntry();
                     } catch (Exception e) {
-                        // Root hatası olursa yoksay
+
                     }
                 }
                 return FileVisitResult.CONTINUE;
@@ -136,17 +141,15 @@ public class DailyBackupModule implements IModule {
 
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-
                 if (file.toAbsolutePath().startsWith(backupPathAbs)) return FileVisitResult.CONTINUE;
                 String fileName = file.getFileName().toString();
                 if (file.toString().contains("target") || fileName.startsWith(".")) return FileVisitResult.CONTINUE;
 
                 try {
                     String zipEntryPath = parentPath.relativize(file).toString().replace("\\", "/");
-                    System.out.println("[BackupDebug] Zipping: " + zipEntryPath);
+
 
                     zos.putNextEntry(new ZipEntry(zipEntryPath));
-
 
                     try (FileInputStream fis = new FileInputStream(file.toFile())) {
                         byte[] buffer = new byte[1024];
@@ -159,7 +162,6 @@ public class DailyBackupModule implements IModule {
                 } catch (Exception e) {
                     System.err.println("[BackupDebug] Error zipping file " + file + ": " + e.getMessage());
                 }
-
                 return FileVisitResult.CONTINUE;
             }
         });
