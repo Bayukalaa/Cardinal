@@ -1,6 +1,5 @@
 package dev.onlydarkness.utils.slashCommands;
 
-;
 import dev.onlydarkness.utils.DatabaseManager;
 import dev.onlydarkness.utils.ModuleManager;
 import dev.onlydarkness.utils.core.ISlashCommand;

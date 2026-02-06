@@ -3,6 +3,7 @@ package dev.onlydarkness.utils.modules;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import dev.onlydarkness.utils.ApiHandler;
 import dev.onlydarkness.utils.commands.WebServerCommand;
 import dev.onlydarkness.utils.core.IModule;
 import dev.onlydarkness.utils.core.ModuleContext;
@@ -77,6 +78,7 @@ public class WebServerModule implements IModule {
 
             isRunning = true;
             context.publishEvent("SYSTEM_LOG", new LogEvent(LogEvent.Level.INFO, getName(), "Web Server started on port " + port));
+            server.createContext("/api", new ApiHandler());
             System.out.println("[WebServer] Server is running on port " + port);
 
         } catch (IOException e) {
@@ -127,21 +129,26 @@ public class WebServerModule implements IModule {
     }
 
 
+
     private void handlePhpRequest(HttpExchange exchange, File phpFile) throws IOException {
         try {
-
             ProcessBuilder pb = new ProcessBuilder(phpCgiPath);
             Map<String, String> env = pb.environment();
 
+            String query = exchange.getRequestURI().getRawQuery();
+            String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+            String contentLength = String.valueOf(exchange.getRequestBody().available());
 
             env.put("GATEWAY_INTERFACE", "CGI/1.1");
             env.put("SERVER_PROTOCOL", "HTTP/1.1");
             env.put("REDIRECT_STATUS", "200");
             env.put("REQUEST_METHOD", exchange.getRequestMethod());
             env.put("SCRIPT_FILENAME", phpFile.getAbsolutePath());
-            env.put("QUERY_STRING", exchange.getRequestURI().getRawQuery());
-            env.put("CONTENT_LENGTH", String.valueOf(exchange.getRequestBody().available()));
-            env.put("CONTENT_TYPE", exchange.getRequestHeaders().getFirst("Content-Type"));
+
+
+            env.put("QUERY_STRING", query != null ? query : "");
+            env.put("CONTENT_TYPE", contentType != null ? contentType : "");
+            env.put("CONTENT_LENGTH", contentLength != null ? contentLength : "0");
 
             Process process = pb.start();
 
@@ -172,6 +179,7 @@ public class WebServerModule implements IModule {
             } else {
 
                 String headerSection = new String(outputBytes, 0, splitIndex, StandardCharsets.UTF_8);
+
                 byte[] bodySection = new byte[outputBytes.length - splitIndex - 4];
                 System.arraycopy(outputBytes, splitIndex + 4, bodySection, 0, bodySection.length);
 
@@ -191,7 +199,8 @@ public class WebServerModule implements IModule {
             }
 
         } catch (Exception e) {
-            String errorMsg = "<h1>500 - PHP Execution Error</h1><pre>" + e.getMessage() + "</pre>";
+
+            String errorMsg = "<h1>500 - PHP Execution Error</h1><pre>" + e.toString() + "</pre>";
             exchange.sendResponseHeaders(500, errorMsg.length());
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(errorMsg.getBytes());
