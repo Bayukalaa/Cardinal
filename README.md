@@ -7,6 +7,7 @@
 
 **Cardinal System**, dinamik modül yükleme kapasitesine sahip, yüksek performanslı ve genişletilebilir bir backend yönetim platformudur. OSHI entegrasyonu ile gerçek zamanlı donanım izleme ve harici arayüzler (UI) için optimize edilmiş bir Socket API sunar.
 
+### **Preview System:** https://onlydarkness.dev
 ---
 
 ## 📖 İçindekiler
