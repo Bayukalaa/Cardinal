@@ -4,7 +4,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import dev.onlydarkness.utils.ApiHandler;
-import dev.onlydarkness.utils.commands.WebServerCommand;
+import dev.onlydarkness.utils.DatabaseManager;
 import dev.onlydarkness.utils.core.IModule;
 import dev.onlydarkness.utils.core.ModuleContext;
 import dev.onlydarkness.utils.modules.events.LogEvent;
@@ -13,8 +13,6 @@ import java.io.*;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 
@@ -25,6 +23,7 @@ public class WebServerModule implements IModule {
     private boolean isRunning = false;
     private String webRoot;
     private String phpCgiPath;
+    private DatabaseManager databaseManager;
 
     @Override
     public String getName() {
@@ -34,13 +33,19 @@ public class WebServerModule implements IModule {
     @Override
     public void onEnable(ModuleContext context) {
         this.context = context;
-        context.registerCommand(new WebServerCommand(this));
-
-        boolean autoStart = context.getConfigBoolean("auto-run-webserver", false);
-
 
         this.phpCgiPath = context.getConfigString("php-cgi-path", "php-cgi");
 
+        // DatabaseManager onEnable içerisinde bir kez başlatılır.
+        this.databaseManager = new DatabaseManager(
+                context.getConfigString("db-host", "127.0.0.1"),
+                context.getConfigString("db-name", "cardinal"),
+                context.getConfigString("db-user", "root"),
+                context.getConfigString("db-pass", ""),
+                context.getConfigInt("db-port", 3306)
+        );
+
+        boolean autoStart = context.getConfigBoolean("auto-run-webserver", false);
         if (autoStart) {
             startServer();
         } else {
@@ -51,10 +56,9 @@ public class WebServerModule implements IModule {
     @Override
     public void onDisable() {
         stopServer();
-    }
-
-    public boolean isRunning() {
-        return isRunning;
+        if (databaseManager != null) {
+            databaseManager.shutdown(); // Bağlantıyı güvenli kapat
+        }
     }
 
     public void startServer() {
@@ -72,13 +76,15 @@ public class WebServerModule implements IModule {
         try {
             server = HttpServer.create(new InetSocketAddress(port), 0);
 
+
+            server.createContext("/api", new ApiHandler(this.databaseManager));
             server.createContext("/", new DynamicFileHandler());
+
             server.setExecutor(Executors.newCachedThreadPool());
             server.start();
 
             isRunning = true;
             context.publishEvent("SYSTEM_LOG", new LogEvent(LogEvent.Level.INFO, getName(), "Web Server started on port " + port));
-            server.createContext("/api", new ApiHandler());
             System.out.println("[WebServer] Server is running on port " + port);
 
         } catch (IOException e) {
@@ -95,6 +101,7 @@ public class WebServerModule implements IModule {
             context.publishEvent("SYSTEM_LOG", new LogEvent(LogEvent.Level.WARN, getName(), "Web Server stopped."));
         }
     }
+
 
 
     class DynamicFileHandler implements HttpHandler {
@@ -118,72 +125,66 @@ public class WebServerModule implements IModule {
                 return;
             }
 
-
             if (file.getName().endsWith(".php")) {
-                handlePhpRequest(exchange, file);
+                handlePhpRequest(exchange, file, requestPath);
             } else {
-
                 serveStaticFile(exchange, file);
             }
         }
     }
 
-
-
-    private void handlePhpRequest(HttpExchange exchange, File phpFile) throws IOException {
+    private void handlePhpRequest(HttpExchange exchange, File phpFile, String requestPath) throws IOException {
         try {
             ProcessBuilder pb = new ProcessBuilder(phpCgiPath);
             Map<String, String> env = pb.environment();
 
             String query = exchange.getRequestURI().getRawQuery();
-            String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
-            String contentLength = String.valueOf(exchange.getRequestBody().available());
+
 
             env.put("GATEWAY_INTERFACE", "CGI/1.1");
             env.put("SERVER_PROTOCOL", "HTTP/1.1");
             env.put("REDIRECT_STATUS", "200");
             env.put("REQUEST_METHOD", exchange.getRequestMethod());
+
+
             env.put("SCRIPT_FILENAME", phpFile.getAbsolutePath());
-
-
+            env.put("DOCUMENT_ROOT", new File(webRoot).getAbsolutePath());
+            env.put("REQUEST_URI", exchange.getRequestURI().toString());
+            env.put("SCRIPT_NAME", requestPath);
+            env.put("PHP_SELF", requestPath);
             env.put("QUERY_STRING", query != null ? query : "");
-            env.put("CONTENT_TYPE", contentType != null ? contentType : "");
-            env.put("CONTENT_LENGTH", contentLength != null ? contentLength : "0");
+
+
+            byte[] postData = exchange.getRequestBody().readAllBytes();
+            env.put("CONTENT_LENGTH", String.valueOf(postData.length));
+            env.put("CONTENT_TYPE", exchange.getRequestHeaders().getFirst("Content-Type") != null ?
+                    exchange.getRequestHeaders().getFirst("Content-Type") : "");
 
             Process process = pb.start();
 
-
-            if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+            // Veriyi PHP-CGI'ya gönder
+            if (postData.length > 0) {
                 try (OutputStream os = process.getOutputStream()) {
-                    exchange.getRequestBody().transferTo(os);
+                    os.write(postData);
+                    os.flush();
                 }
             }
 
-
-            ByteArrayOutputStream outputBuffer = new ByteArrayOutputStream();
-            try (InputStream is = process.getInputStream()) {
-                is.transferTo(outputBuffer);
-            }
-
-            byte[] outputBytes = outputBuffer.toByteArray();
-
-
+            // Çıktıyı oku ve işle
+            byte[] outputBytes = process.getInputStream().readAllBytes();
             int splitIndex = findHeaderEnd(outputBytes);
 
             if (splitIndex == -1) {
-
                 exchange.sendResponseHeaders(200, outputBytes.length);
                 try (OutputStream os = exchange.getResponseBody()) {
                     os.write(outputBytes);
                 }
             } else {
-
                 String headerSection = new String(outputBytes, 0, splitIndex, StandardCharsets.UTF_8);
-
                 byte[] bodySection = new byte[outputBytes.length - splitIndex - 4];
                 System.arraycopy(outputBytes, splitIndex + 4, bodySection, 0, bodySection.length);
 
-
+                // Header'ları aktar
                 String[] lines = headerSection.split("\r\n");
                 for (String line : lines) {
                     if (line.contains(":")) {
@@ -197,40 +198,27 @@ public class WebServerModule implements IModule {
                     os.write(bodySection);
                 }
             }
-
         } catch (Exception e) {
-
             String errorMsg = "<h1>500 - PHP Execution Error</h1><pre>" + e.toString() + "</pre>";
             exchange.sendResponseHeaders(500, errorMsg.length());
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(errorMsg.getBytes());
             }
-            e.printStackTrace();
         }
     }
 
     private int findHeaderEnd(byte[] bytes) {
         for (int i = 0; i < bytes.length - 3; i++) {
-            if (bytes[i] == '\r' && bytes[i+1] == '\n' && bytes[i+2] == '\r' && bytes[i+3] == '\n') {
-                return i;
-            }
+            if (bytes[i] == '\r' && bytes[i+1] == '\n' && bytes[i+2] == '\r' && bytes[i+3] == '\n') return i;
         }
         return -1;
     }
 
     private void serveStaticFile(HttpExchange exchange, File file) throws IOException {
-        String mimeType = getMimeType(file.getName());
-        exchange.getResponseHeaders().set("Content-Type", mimeType);
+        exchange.getResponseHeaders().set("Content-Type", getMimeType(file.getName()));
         exchange.sendResponseHeaders(200, file.length());
-
-        try (OutputStream os = exchange.getResponseBody();
-             FileInputStream fs = new FileInputStream(file)) {
-            byte[] buffer = new byte[1024];
-            int count;
-            while ((count = fs.read(buffer)) >= 0) {
-                os.write(buffer, 0, count);
-            }
-        }
+        Files.copy(file.toPath(), exchange.getResponseBody());
+        exchange.getResponseBody().close();
     }
 
     private void send404(HttpExchange exchange) throws IOException {
@@ -252,13 +240,8 @@ public class WebServerModule implements IModule {
     }
 
     private void createDefaultIndexHtml(File folder) {
-        File index = new File(folder, "index.php");
-        String content = """
-                <?php
-                echo "<h1>Cardinal WebServer</h1>";
-                echo "<p>PHP is working! Date: " . date('Y-m-d H:i:s') . "</p>";
-                ?>
-                """;
-        try { Files.writeString(index.toPath(), content); } catch (IOException ignored) {}
+        try {
+            Files.writeString(new File(folder, "index.php").toPath(), "<?php phpinfo(); ?>");
+        } catch (IOException ignored) {}
     }
 }

@@ -35,7 +35,7 @@ public class DatabaseModule implements IModule {
     @Override
     public void onDisable() {
         if (databaseManager != null) {
-            databaseManager.close();
+            databaseManager.shutdown();
             System.out.println("[Database] MySQL Connection closed.");
         }
     }

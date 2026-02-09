@@ -64,8 +64,6 @@ public class DiscordBotModule implements IModule {
 
         this.slashCommandManager.register(new PingCommand());
         this.slashCommandManager.register(new ExecCommand(this.moduleManager, this.channelID));
-        this.slashCommandManager.register(new RegisterCommand(this.moduleManager));
-        this.slashCommandManager.register(new ProfileCommand(this.moduleManager));
         this.slashCommandManager.register(new ProductsAddCommand(this.moduleManager));
         this.slashCommandManager.register(new ProductsRemoveCommand(this.moduleManager));
         this.slashCommandManager.register(new ProductsListCommand(this.moduleManager));
